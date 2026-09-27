@@ -19,10 +19,10 @@ With no arguments, validates every protocol-*/ directory found next to
 this script's repository root. Exits 0 if every fixture is valid, 1
 otherwise.
 
-Warnings (e.g. a fixture with no ``source_reference``) are printed to
-stdout by default. Pass ``--quiet`` to suppress them so a fully passing
-CI run is not dominated by warning noise; errors still go to stderr and
-the final OK/FAILED summary is always printed.
+Warnings are printed to stdout by default; pass ``--quiet`` to suppress
+them. Errors always go to stderr and the final OK/FAILED summary is always
+printed. A missing ``source_reference`` is an error, not a warning: every
+fixture must cite an authoritative upstream source (see CONTRIBUTING.md).
 """
 from __future__ import annotations
 
@@ -34,20 +34,29 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Mirrors canary-fixtures' supported surfaces; must be kept in sync with
+# docs/fixture-contract.md in the upstream canary-fixtures repo. Changing
+# this without a corresponding upstream change would make the validator accept
+# fixtures the loader would reject (or vice versa).
 SURFACES = {"xdr", "rpc", "soroban"}
 XDR_TYPES = {"StellarValue", "ContractExecutable"}
 # Set of assertion kinds supported by canary-xdr for a given XDR value.
 # Must be kept in sync with canary-xdr's supported assertion kinds.
 XDR_KINDS = {"decode-success", "decode-failure", "roundtrip", "encode-equals"}
 RPC_METHODS = {"get-network", "get-latest-ledger"}
-RPC_ASSERT_KINDS = {"field-exists", "field-type", "field-equals"}
-RPC_ASSERT_TYPES = {"string", "integer", "boolean", "array", "object"}
+RPC_ASSERT_KINDS = {"field-exists", "field-absent", "field-type", "field-equals"}
+# JSON type names accepted for RPC field-type assertions. Keep this set in
+# sync with the `expected_type` enum in schemas/fixture-v1.schema.json.
+RPC_ASSERT_TYPES = {"string", "number", "bool", "object", "array", "null"}
 SOROBAN_EXPECT_KINDS = {"simulation-success", "simulation-error"}
 # Set of kebab-case capability strings a fixture may list in
 # `required_capabilities`. Must be kept in sync with
 # canary_core::Capability in StellarCanary/Protocol-Canary, whose
-# kebab-case names these mirror (the same cross-reference is documented in
-# schemas/fixture-v1.schema.json's required_capabilities description).
+# kebab-case names these mirror, AND with the required_capabilities
+# enum in schemas/fixture-v1.schema.json (the same cross-reference is
+# documented there). The two lists are maintained independently (a
+# Python set and a JSON Schema enum), so adding a value to one without
+# the other silently creates a validator/schema mismatch.
 CAPABILITIES = {
     "soroban-contract",
     "rpc-client",
@@ -68,12 +77,36 @@ class Fixture:
 class Report:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Fixture ids keyed by the fixture file's path, for fixtures whose ``id``
+    # has already been parsed and validated (see ``known_fixture_id``). Lets
+    # error/warning messages name the fixture without each call site having to
+    # restate its id explicitly.
+    fixture_ids: dict[Path, str] = field(default_factory=dict)
 
-    def error(self, path: Path, message: str) -> None:
-        self.errors.append(f"{path}: {message}")
+    def register_fixture_id(self, path: Path, fixture_id: str | None) -> None:
+        """Record ``fixture_id`` as ``path``'s id when it is known to be valid.
 
-    def warning(self, path: Path, message: str) -> None:
-        self.warnings.append(f"{path}: {message}")
+        A falsy/``None`` id leaves ``path`` unregistered so its messages fall
+        back to the path-only format.
+        """
+        if fixture_id:
+            self.fixture_ids[path] = fixture_id
+
+    def _format(self, path: Path, message: str, fixture_id: str | None) -> str:
+        fid = fixture_id if fixture_id is not None else self.fixture_ids.get(path)
+        if fid:
+            return f"{path} [{fid}]: {message}"
+        return f"{path}: {message}"
+
+    def error(
+        self, path: Path, message: str, fixture_id: str | None = None
+    ) -> None:
+        self.errors.append(self._format(path, message, fixture_id))
+
+    def warning(
+        self, path: Path, message: str, fixture_id: str | None = None
+    ) -> None:
+        self.warnings.append(self._format(path, message, fixture_id))
 
     @property
     def ok(self) -> bool:
@@ -96,6 +129,21 @@ def load_fixture(path: Path, report: Report) -> Fixture | None:
         report.error(path, f"invalid TOML: {exc}")
         return None
     return Fixture(path=path, data=data)
+
+
+def known_fixture_id(fx: Fixture) -> str | None:
+    """Return ``fx``'s id when it is present and valid, else ``None``.
+
+    Only a non-empty, lowercase string counts: those are exactly the
+    properties ``validate_common_fields`` requires of ``id``. An id that is
+    missing, non-string, empty, or not lowercase is not yet known to be
+    valid -- the failure is itself reported by ``validate_common_fields`` --
+    so messages about that fixture fall back to a path-only format.
+    """
+    fid = fx.data.get("id")
+    if isinstance(fid, str) and fid and fid == fid.lower():
+        return fid
+    return None
 
 
 def _require(data: dict, key: str, expected_type: type, path: Path, report: Report) -> bool:
@@ -148,10 +196,11 @@ def validate_common_fields(fx: Fixture, report: Report) -> None:
         if not isinstance(data["source_reference"], str) or not data["source_reference"]:
             report.error(path, "field 'source_reference', if present, must be a non-empty string")
     else:
-        report.warning(
+        report.error(
             path,
-            "no 'source_reference' set; protocol-specific fixtures should cite an "
-            "authoritative upstream source",
+            "no 'source_reference' set; protocol-specific fixtures must cite an "
+            "authoritative upstream source (e.g. CAP-0083 or "
+            "https://developers.stellar.org/docs/data/apis/rpc/api-reference/methods/getNetwork)",
         )
 
     if "required_capabilities" in data:
@@ -205,10 +254,14 @@ def validate_xdr_body(fx: Fixture, report: Report) -> None:
         )
 
     if _require(data, "value_base64", str, path, report):
+        if not data["value_base64"]:
+            report.error(path, "field 'value_base64' must not be empty")
         _validate_base64(data["value_base64"], "value_base64", path, report)
 
     if (ok_kind and data["kind"] == "encode-equals") or "expected_base64" in data:
         if _require(data, "expected_base64", str, path, report):
+            if not data["expected_base64"]:
+                report.error(path, "field 'expected_base64' must not be empty")
             _validate_base64(data["expected_base64"], "expected_base64", path, report)
 
 
@@ -255,10 +308,23 @@ def validate_rpc_body(fx: Fixture, report: Report) -> None:
 def validate_soroban_body(fx: Fixture, report: Report) -> None:
     data, path = fx.data, fx.path
 
-    _require(data, "source_account", str, path, report)
-    _require(data, "contract_id", str, path, report)
-    _require(data, "function", str, path, report)
+    if _require(data, "source_account", str, path, report) and not data["source_account"]:
+        report.error(path, "field 'source_account' must not be empty")
+    if _require(data, "contract_id", str, path, report) and not data["contract_id"]:
+        report.error(path, "field 'contract_id' must not be empty")
+    if _require(data, "function", str, path, report) and not data["function"]:
+        report.error(path, "field 'function' must not be empty")
     _require(data, "sequence_number", int, path, report)
+
+    # 'args' is optional but, when present, must match the schema's
+    # "args": { "type": "array" } declaration (see
+    # schemas/fixture-v1.schema.json's soroban conditional).
+    if "args" in data and not isinstance(data["args"], list):
+        report.error(
+            path,
+            f"field 'args', if present, must be an array, "
+            f"got {type(data['args']).__name__}",
+        )
 
     if "expect" not in data:
         report.error(path, "missing required field 'expect'")
@@ -307,6 +373,9 @@ def validate_directory(root: Path) -> Report:
         fx = load_fixture(path, report)
         if fx is not None:
             fixtures.append(fx)
+
+    for fx in fixtures:
+        report.register_fixture_id(fx.path, known_fixture_id(fx))
 
     for fx in fixtures:
         validate_common_fields(fx, report)
