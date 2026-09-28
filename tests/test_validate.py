@@ -225,6 +225,11 @@ class ValidatorTests(unittest.TestCase):
         report = self.run_validation({"a.toml": good})
         self.assertEqual(report.errors, [])
 
+    def test_rejects_non_array_required_capabilities(self) -> None:
+        bad = VALID_XDR + '\nrequired_capabilities = "rpc-client"\n'
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(any("must be an array" in e for e in report.errors))
+
     def test_rejects_missing_input_file(self) -> None:
         bad = VALID_XDR + '\ninput_file = "does-not-exist.xdr.b64"\n'
         report = self.run_validation({"a.toml": bad})
@@ -305,6 +310,11 @@ class ValidatorTests(unittest.TestCase):
                     any(f"field '{field}' must not be empty" in error for error in report.errors),
                     report.errors,
                 )
+
+    def test_rejects_non_string_source_reference(self) -> None:
+        bad = VALID_XDR.replace('source_reference = "CAP-0083"', 'source_reference = 83')
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(any("source_reference" in e for e in report.errors))
 
     def test_rejects_empty_source_reference(self) -> None:
         bad = VALID_XDR.replace('source_reference = "CAP-0083"', 'source_reference = ""')
