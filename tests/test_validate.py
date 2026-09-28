@@ -5,6 +5,7 @@ Run with: python3 -m unittest discover tests
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import sys
@@ -21,6 +22,14 @@ validate = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 sys.modules["validate"] = validate
 _spec.loader.exec_module(validate)
+
+SCHEMA_SYNC_PATH = REPO_ROOT / "tools" / "validate" / "schema_sync.py"
+
+_sync_spec = importlib.util.spec_from_file_location("schema_sync", SCHEMA_SYNC_PATH)
+schema_sync = importlib.util.module_from_spec(_sync_spec)
+assert _sync_spec.loader is not None
+sys.modules["schema_sync"] = schema_sync
+_sync_spec.loader.exec_module(schema_sync)
 
 
 VALID_XDR = """
@@ -225,13 +234,36 @@ class ValidatorTests(unittest.TestCase):
         report = self.run_validation({"a.toml": good})
         self.assertEqual(report.errors, [])
 
+    def test_rejects_non_array_required_capabilities(self) -> None:
+        bad = VALID_XDR + '\nrequired_capabilities = "rpc-client"\n'
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(any("must be an array" in e for e in report.errors))
+
     def test_rejects_missing_input_file(self) -> None:
         bad = VALID_XDR + '\ninput_file = "does-not-exist.xdr.b64"\n'
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("does not resolve to an existing file" in e for e in report.errors))
 
+    def test_rejects_missing_expected_file(self) -> None:
+        bad = VALID_XDR + '\nexpected_file = "does-not-exist.xdr.b64"\n'
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(
+            any("does not resolve to an existing file" in e for e in report.errors)
+        )
+
     def test_rejects_empty_input_file(self) -> None:
         bad = VALID_XDR + '\ninput_file = ""\n'
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(
+            any("field 'input_file', if present, must be a non-empty string" in e for e in report.errors)
+        )
+
+    def test_rejects_non_string_input_file(self) -> None:
+        # input_file is read from TOML, so an unquoted value can be parsed as
+        # an int (or any other non-string) instead of the path the contributor
+        # meant. The same guard that rejects an empty input_file must reject a
+        # non-string one rather than attempting to resolve it as a path.
+        bad = VALID_XDR + "\ninput_file = 42\n"
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(
             any("field 'input_file', if present, must be a non-empty string" in e for e in report.errors)
@@ -299,6 +331,11 @@ class ValidatorTests(unittest.TestCase):
                     report.errors,
                 )
 
+    def test_rejects_non_string_source_reference(self) -> None:
+        bad = VALID_XDR.replace('source_reference = "CAP-0083"', 'source_reference = 83')
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(any("source_reference" in e for e in report.errors))
+
     def test_rejects_empty_source_reference(self) -> None:
         bad = VALID_XDR.replace('source_reference = "CAP-0083"', 'source_reference = ""')
         report = self.run_validation({"a.toml": bad})
@@ -361,6 +398,18 @@ class ValidatorTests(unittest.TestCase):
         bad = VALID_XDR.replace('description = "example"\n', "")
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("description" in e for e in report.errors))
+
+    def test_rejects_empty_description(self) -> None:
+        # schemas/fixture-v1.schema.json declares description with
+        # minLength 1, so an empty string must fail validation the same way
+        # an empty id or category does, rather than passing structurally.
+        bad = VALID_XDR.replace('description = "example"', 'description = ""')
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(
+            any("field 'description' must not be empty" in e for e in report.errors),
+            report.errors,
+        )
+
     def test_rejects_empty_id(self) -> None:
         bad = VALID_XDR.replace(
             'id = "p28-xdr-cap83-example"', 'id = ""'
@@ -755,6 +804,86 @@ class QuietFlagTests(unittest.TestCase):
         self.assertNotIn("warning:", out)
         self.assertIn("OK:", out)
         self.assertEqual(code, 0)
+
+
+class SchemaSyncTests(unittest.TestCase):
+    """schemas/fixture-v1.schema.json must not drift from validate.py.
+
+    The schema is this repository's editor-facing mirror of the validator's
+    rules, but nothing consumes it at run time. ``schema_sync.py`` (standard
+    library only) compares the schema's enums and required-field lists with
+    ``validate.py``'s constants; these tests pin that enforcement so a
+    validator change such as adding a new XDR type or RPC method cannot
+    silently leave the schema stale. See CONTRIBUTING.md#fixture-schema.
+    """
+
+    def setUp(self) -> None:
+        self.schema = schema_sync.load_schema()
+        self.validator = validate
+
+    def test_repository_schema_is_in_sync_with_the_validator(self) -> None:
+        self.assertEqual(schema_sync.check_sync(self.schema, self.validator), [])
+
+    def test_main_reports_ok_for_the_repository(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = schema_sync.main([])
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("OK:", out.getvalue())
+
+    def test_detects_rpc_method_the_schema_lacks(self) -> None:
+        # Simulates validate.py gaining an RPC method the schema does not
+        # list: the schema is unchanged, so dropping a method from its enum
+        # is equivalent to the validator supporting an extra one.
+        drift = copy.deepcopy(self.schema)
+        block = schema_sync.surface_block(drift, "rpc")
+        assert block is not None
+        block["properties"]["method"]["enum"].remove("get-latest-ledger")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("rpc method enum" in e for e in errors), errors)
+        self.assertTrue(any("get-latest-ledger" in e for e in errors), errors)
+
+    def test_detects_rpc_method_the_validator_lacks(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        block = schema_sync.surface_block(drift, "rpc")
+        assert block is not None
+        block["properties"]["method"]["enum"].append("get-transaction")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("rpc method enum" in e for e in errors), errors)
+        self.assertTrue(any("get-transaction" in e for e in errors), errors)
+
+    def test_detects_xdr_type_drift(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        block = schema_sync.surface_block(drift, "xdr")
+        assert block is not None
+        block["properties"]["type"]["enum"].append("LedgerEntry")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("xdr type enum" in e for e in errors), errors)
+
+    def test_detects_missing_required_field(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        drift["required"].remove("source_reference")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("top-level required fields" in e for e in errors), errors)
+        self.assertTrue(any("source_reference" in e for e in errors), errors)
+
+    def test_detects_capability_drift(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        drift["properties"]["required_capabilities"]["items"]["enum"].append(
+            "time-travel"
+        )
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("required_capabilities enum" in e for e in errors), errors)
+
+    def test_detects_a_missing_surface_block(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        drift["allOf"] = [
+            block
+            for block in drift["allOf"]
+            if block["if"]["properties"]["surface"]["const"] != "soroban"
+        ]
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("soroban surface" in e for e in errors), errors)
 
 
 if __name__ == "__main__":
