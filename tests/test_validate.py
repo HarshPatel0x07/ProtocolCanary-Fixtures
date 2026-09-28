@@ -5,6 +5,7 @@ Run with: python3 -m unittest discover tests
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import sys
@@ -21,6 +22,14 @@ validate = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 sys.modules["validate"] = validate
 _spec.loader.exec_module(validate)
+
+SCHEMA_SYNC_PATH = REPO_ROOT / "tools" / "validate" / "schema_sync.py"
+
+_sync_spec = importlib.util.spec_from_file_location("schema_sync", SCHEMA_SYNC_PATH)
+schema_sync = importlib.util.module_from_spec(_sync_spec)
+assert _sync_spec.loader is not None
+sys.modules["schema_sync"] = schema_sync
+_sync_spec.loader.exec_module(schema_sync)
 
 
 VALID_XDR = """
@@ -762,6 +771,86 @@ class QuietFlagTests(unittest.TestCase):
         self.assertNotIn("warning:", out)
         self.assertIn("OK:", out)
         self.assertEqual(code, 0)
+
+
+class SchemaSyncTests(unittest.TestCase):
+    """schemas/fixture-v1.schema.json must not drift from validate.py.
+
+    The schema is this repository's editor-facing mirror of the validator's
+    rules, but nothing consumes it at run time. ``schema_sync.py`` (standard
+    library only) compares the schema's enums and required-field lists with
+    ``validate.py``'s constants; these tests pin that enforcement so a
+    validator change such as adding a new XDR type or RPC method cannot
+    silently leave the schema stale. See CONTRIBUTING.md#fixture-schema.
+    """
+
+    def setUp(self) -> None:
+        self.schema = schema_sync.load_schema()
+        self.validator = validate
+
+    def test_repository_schema_is_in_sync_with_the_validator(self) -> None:
+        self.assertEqual(schema_sync.check_sync(self.schema, self.validator), [])
+
+    def test_main_reports_ok_for_the_repository(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = schema_sync.main([])
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("OK:", out.getvalue())
+
+    def test_detects_rpc_method_the_schema_lacks(self) -> None:
+        # Simulates validate.py gaining an RPC method the schema does not
+        # list: the schema is unchanged, so dropping a method from its enum
+        # is equivalent to the validator supporting an extra one.
+        drift = copy.deepcopy(self.schema)
+        block = schema_sync.surface_block(drift, "rpc")
+        assert block is not None
+        block["properties"]["method"]["enum"].remove("get-latest-ledger")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("rpc method enum" in e for e in errors), errors)
+        self.assertTrue(any("get-latest-ledger" in e for e in errors), errors)
+
+    def test_detects_rpc_method_the_validator_lacks(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        block = schema_sync.surface_block(drift, "rpc")
+        assert block is not None
+        block["properties"]["method"]["enum"].append("get-transaction")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("rpc method enum" in e for e in errors), errors)
+        self.assertTrue(any("get-transaction" in e for e in errors), errors)
+
+    def test_detects_xdr_type_drift(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        block = schema_sync.surface_block(drift, "xdr")
+        assert block is not None
+        block["properties"]["type"]["enum"].append("LedgerEntry")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("xdr type enum" in e for e in errors), errors)
+
+    def test_detects_missing_required_field(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        drift["required"].remove("source_reference")
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("top-level required fields" in e for e in errors), errors)
+        self.assertTrue(any("source_reference" in e for e in errors), errors)
+
+    def test_detects_capability_drift(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        drift["properties"]["required_capabilities"]["items"]["enum"].append(
+            "time-travel"
+        )
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("required_capabilities enum" in e for e in errors), errors)
+
+    def test_detects_a_missing_surface_block(self) -> None:
+        drift = copy.deepcopy(self.schema)
+        drift["allOf"] = [
+            block
+            for block in drift["allOf"]
+            if block["if"]["properties"]["surface"]["const"] != "soroban"
+        ]
+        errors = schema_sync.check_sync(drift, self.validator)
+        self.assertTrue(any("soroban surface" in e for e in errors), errors)
 
 
 if __name__ == "__main__":
