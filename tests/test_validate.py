@@ -90,6 +90,21 @@ def write(dir_path: Path, name: str, contents: str) -> Path:
     return path
 
 
+def run_main(argv: list[str]) -> tuple[int, str, str]:
+    """Invoke ``validate.main`` capturing its (stdout, stderr).
+
+    ``main`` is the actual entry point CI runs (``python3
+    tools/validate/validate.py``): it parses argv, prints its report to
+    stdout/stderr and returns an exit code. It does not return its
+    ``Report``, so tests exercise it the way CI does rather than only
+    through the lower-level ``validate_directory`` helper.
+    """
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        exit_code = validate.main(argv)
+    return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
 class ValidatorTests(unittest.TestCase):
     def run_validation(self, files: dict[str, str]) -> "validate.Report":
         with tempfile.TemporaryDirectory() as tmp:
