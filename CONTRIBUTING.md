@@ -111,6 +111,18 @@ linting; if the two ever disagree, `Protocol-Canary`'s implementation wins
 and this repository's schema/validator must be corrected to match — never
 the other way around.
 
+That schema is kept from silently drifting away from
+`tools/validate/validate.py` by `tools/validate/schema_sync.py` — a
+standard-library-only check (there is no third-party JSON Schema engine in
+this repository's dependency set) that compares the schema's enums and
+required-field lists against the validator's constants. The repository test
+suite runs it against the shipped schema (`tests/test_validate.py`), so a
+validator change that adds, removes, or renames a rule — a new XDR `type`, a
+new RPC `method`, a newly required field, a new capability, and so on —
+fails CI unless the same pull request updates `schemas/fixture-v1.schema.json`
+to match. `python3 tools/validate/schema_sync.py` runs the check on its own
+and exits non-zero on any disagreement.
+
 The fixture format is versioned: `schemas/fixture-v1.schema.json` is titled
 "Protocol Canary fixture (schema_version 1)". **Every protocol pack must
 state, in its `docs/protocol-NN.md` or the pack's `README.md`, which fixture
@@ -120,6 +132,26 @@ version is a per-pack property recorded in prose, not a field repeated in
 each fixture file. Recording it from the start is what lets a future format
 revision (e.g. `schema_version 2`) be scoped per pack rather than
 retrofitted by guesswork.
+
+### Protocol filtering is skip-not-fail
+
+A fixture's `protocol` field declares which protocol pack it belongs to.
+When a consumer runs with a protocol filter — for example
+`stellar-canary check --fixtures-dir <checkout> --protocol 28 --json` — every
+fixture whose `protocol` does not equal the requested value is **skipped,
+not failed**. This matches `schemas/fixture-v1.schema.json`'s `protocol`
+description verbatim: "A run whose `--protocol` does not match is skipped,
+not failed."
+
+Once this repository holds more than one populated protocol pack (see the
+`protocol-27/` pack, expected to be populated eventually), that has a
+practical consequence for CI: a run scoped with `--protocol` over the whole
+repository reports fewer fixtures than the tree contains, and a mostly
+skipped run is **not** a validation failure. Do not read a low fixture count
+under `--protocol` filtering as something being wrong with the fixtures.
+`tools/validate/validate.py` itself does not filter by protocol — it
+validates every fixture it finds — so use it (or `make validate`) when you
+want the whole corpus checked regardless of pack.
 
 Common fields (every fixture):
 
@@ -187,6 +219,11 @@ If you need an XDR `type` this repository does not yet support, that is a
 issue/PR against `Protocol-Canary`'s `canary-xdr` crate first (see its own
 `CONTRIBUTING.md`), and only add the fixture here once that support exists
 and is released.
+
+The same applies to an RPC `method` outside the `get-network` |
+`get-latest-ledger` pair the table above lists: open an issue/PR against
+`Protocol-Canary`'s `canary-rpc` crate first, and only add the fixture here
+once that support exists and is released.
 
 ## What never belongs in a fixture
 

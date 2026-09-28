@@ -44,6 +44,11 @@ discussion and diff. New entries must include that link; see
   discovery rule as the validator and rewrites only the marked region of
   README.md. `make badge` regenerates it; CI runs `--check`, so the number
   cannot silently drift from the fixture tree. ([ab88ca4])
+- `tools/validate/schema_sync.py`, a standard-library-only check that fails
+  when `schemas/fixture-v1.schema.json`'s enums or required-field lists drift
+  from `tools/validate/validate.py`'s constants, with coverage in
+  `tests/test_validate.py`. `schemas/fixture-v1.schema.json` now also lists
+  `source_reference` as required, matching the validator. ([PR #231])
 
 ### Changed
 
@@ -87,6 +92,13 @@ discussion and diff. New entries must include that link; see
   alongside the README's Provenance reference, so PR authors are pointed at
   the fuller step-by-step walkthrough (source, determinism, ID stability)
   that the template's review questions map to. ([PR #219])
+- README.md's fixture-format section states which RPC methods the `rpc`
+  surface currently supports (`get-network` and `get-latest-ledger`) and
+  links `CONTRIBUTING.md` for adding a new one. ([PR #231])
+- `CONTRIBUTING.md`'s fixture-schema section documents that `--protocol`
+  filtering skips, rather than fails, fixtures whose `protocol` does not
+  match, cross-referencing `schemas/fixture-v1.schema.json`, and describes
+  the schema/validator sync enforcement added above. ([PR #231])
 
 ### Known gaps
 
@@ -129,8 +141,9 @@ discussion and diff. New entries must include that link; see
 
 <!-- Link definitions: the pull request or commit that introduced each
      entry above. Commits listed here were pushed directly to `main`
-     without a pull request; PR #97, PR #143, PR #176, PR #219, and PR #232
-     are the [Unreleased] entries that originated from pull requests. -->
+     without a pull request; PR #97, PR #143, PR #176, PR #219, PR #231,
+     and PR #232 are the [Unreleased] entries that originated from pull
+     requests. -->
 
 [757e1e7]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/commit/757e1e777489bb5c20e7500b245370de227c66b3
 [5142110]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/commit/51421106999811666502b2e7da7ae3b9e351fd9c
@@ -147,4 +160,5 @@ discussion and diff. New entries must include that link; see
 [PR #143]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/143
 [PR #176]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/176
 [PR #219]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/219
+[PR #231]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/231
 [PR #232]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/232
