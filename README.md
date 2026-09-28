@@ -220,6 +220,19 @@ suite runs it (`tests/test_validate.py`), so a validator rule change — for
 example adding a new XDR type or RPC method — that is not mirrored in the
 schema fails CI rather than leaving the schema silently stale.
 
+**Structural validation is not live-network verification.** A green CI run
+means every fixture is well-formed and internally consistent; it does not
+mean any fixture's live-network assertion was just re-checked against the
+real network. The RPC and Soroban fixtures in `protocol-28/` were each
+manually verified against a live `soroban-testnet.stellar.org` endpoint on
+a specific date, and that point-in-time observation is recorded only in
+each fixture's header comment and in [`docs/protocol-28.md`](docs/protocol-28.md)
+— neither `tools/validate/validate.py` nor CI re-runs it. A fixture can
+therefore keep passing CI long after the live behavior it asserts has
+changed; the date recorded in its header comment is what lets a reader
+judge how stale that observation may be (see the date convention in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#recording-verification-dates)).
+
 The commands CI runs are also available as Makefile targets, so you can
 run exactly what CI runs without typing the commands out:
 

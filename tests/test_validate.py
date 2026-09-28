@@ -234,6 +234,11 @@ class ValidatorTests(unittest.TestCase):
         report = self.run_validation({"a.toml": good})
         self.assertEqual(report.errors, [])
 
+    def test_rejects_non_array_required_capabilities(self) -> None:
+        bad = VALID_XDR + '\nrequired_capabilities = "rpc-client"\n'
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(any("must be an array" in e for e in report.errors))
+
     def test_rejects_missing_input_file(self) -> None:
         bad = VALID_XDR + '\ninput_file = "does-not-exist.xdr.b64"\n'
         report = self.run_validation({"a.toml": bad})
@@ -248,6 +253,17 @@ class ValidatorTests(unittest.TestCase):
 
     def test_rejects_empty_input_file(self) -> None:
         bad = VALID_XDR + '\ninput_file = ""\n'
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(
+            any("field 'input_file', if present, must be a non-empty string" in e for e in report.errors)
+        )
+
+    def test_rejects_non_string_input_file(self) -> None:
+        # input_file is read from TOML, so an unquoted value can be parsed as
+        # an int (or any other non-string) instead of the path the contributor
+        # meant. The same guard that rejects an empty input_file must reject a
+        # non-string one rather than attempting to resolve it as a path.
+        bad = VALID_XDR + "\ninput_file = 42\n"
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(
             any("field 'input_file', if present, must be a non-empty string" in e for e in report.errors)
@@ -315,6 +331,11 @@ class ValidatorTests(unittest.TestCase):
                     report.errors,
                 )
 
+    def test_rejects_non_string_source_reference(self) -> None:
+        bad = VALID_XDR.replace('source_reference = "CAP-0083"', 'source_reference = 83')
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(any("source_reference" in e for e in report.errors))
+
     def test_rejects_empty_source_reference(self) -> None:
         bad = VALID_XDR.replace('source_reference = "CAP-0083"', 'source_reference = ""')
         report = self.run_validation({"a.toml": bad})
@@ -377,6 +398,18 @@ class ValidatorTests(unittest.TestCase):
         bad = VALID_XDR.replace('description = "example"\n', "")
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("description" in e for e in report.errors))
+
+    def test_rejects_empty_description(self) -> None:
+        # schemas/fixture-v1.schema.json declares description with
+        # minLength 1, so an empty string must fail validation the same way
+        # an empty id or category does, rather than passing structurally.
+        bad = VALID_XDR.replace('description = "example"', 'description = ""')
+        report = self.run_validation({"a.toml": bad})
+        self.assertTrue(
+            any("field 'description' must not be empty" in e for e in report.errors),
+            report.errors,
+        )
+
     def test_rejects_empty_id(self) -> None:
         bad = VALID_XDR.replace(
             'id = "p28-xdr-cap83-example"', 'id = ""'

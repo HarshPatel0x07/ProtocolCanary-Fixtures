@@ -39,10 +39,19 @@ from pathlib import Path
 # this without a corresponding upstream change would make the validator accept
 # fixtures the loader would reject (or vice versa).
 SURFACES = {"xdr", "rpc", "soroban"}
+# Set of XDR type names supported by canary-xdr. Must be kept in sync with the
+# types canary-xdr actually supports -- an unsupported type is a Protocol-Canary
+# limitation, not something to work around here (see CONTRIBUTING.md, "If you
+# need an XDR type this repository does not yet support"): open an issue/PR
+# against canary-xdr first, and only add the type here once that support is
+# released.
 XDR_TYPES = {"StellarValue", "ContractExecutable"}
 # Set of assertion kinds supported by canary-xdr for a given XDR value.
 # Must be kept in sync with canary-xdr's supported assertion kinds.
 XDR_KINDS = {"decode-success", "decode-failure", "roundtrip", "encode-equals"}
+# Set of RPC methods supported by canary-rpc. Must be kept in sync with the
+# methods canary-rpc actually implements: a value added here only names a string;
+# the corresponding method must already exist upstream in canary-rpc.
 RPC_METHODS = {"get-network", "get-latest-ledger"}
 RPC_ASSERT_KINDS = {"field-exists", "field-absent", "field-type", "field-equals"}
 # JSON type names accepted for RPC field-type assertions. Keep this set in
@@ -197,6 +206,15 @@ def validate_common_fields(fx: Fixture, report: Report) -> None:
     if ok_id and data["id"] != data["id"].lower():
         report.error(path, "field 'id' must be lowercase")
 
+    # `protocol` has no upper bound on purpose: this validator deliberately
+    # does not maintain a list of supported Stellar protocol versions, so
+    # shipping a new protocol never requires a validator change here. The
+    # cost is that a stray or typo'd value (e.g. 82 where 28 was meant)
+    # passes structural validation silently. Catching that is a pack-level
+    # responsibility, not this validator's: each pack's own test suite
+    # asserts every fixture under protocol-NN/ targets NN (see
+    # tests/test_pack_protocol_28.py's test_every_fixture_targets_protocol_28).
+    # See CONTRIBUTING.md's "Fixture schema" section for the same note.
     ok_protocol = _require(data, "protocol", int, path, report)
     if ok_protocol and data["protocol"] < 1:
         report.error(path, "field 'protocol' must be a positive integer")
@@ -218,7 +236,9 @@ def validate_common_fields(fx: Fixture, report: Report) -> None:
             "use a specific CAP/topic slug",
         )
 
-    _require(data, "description", str, path, report)
+    ok_description = _require(data, "description", str, path, report)
+    if ok_description and not data["description"]:
+        report.error(path, "field 'description' must not be empty")
 
     if "source_reference" in data:
         if not isinstance(data["source_reference"], str) or not data["source_reference"]:
