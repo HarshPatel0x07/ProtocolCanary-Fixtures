@@ -171,8 +171,8 @@ discussion and diff. New entries must include that link; see
 <!-- Link definitions: the pull request or commit that introduced each
      entry above. Commits listed here were pushed directly to `main`
      without a pull request; PR #97, PR #143, PR #176, PR #219, PR #231,
-     PR #232 and PR #236 are the [Unreleased] entries that originated from
-     pull requests. -->
+     PR #232, PR #236 and PR #252 are the [Unreleased] entries that
+     originated from pull requests. -->
 
 [757e1e7]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/commit/757e1e777489bb5c20e7500b245370de227c66b3
 [5142110]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/commit/51421106999811666502b2e7da7ae3b9e351fd9c
