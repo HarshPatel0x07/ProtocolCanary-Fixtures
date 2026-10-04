@@ -123,6 +123,11 @@ discussion and diff. New entries must include that link; see
   rejection message quotes the rejected method and enumerates the accepted
   ones, for both `get-balance` and `getTransactions`, instead of only
   checking that some error mentioned `method`. ([PR #236])
+- `schemas/fixture-v1.schema.json`'s `category` description now states that
+  `tools/validate/validate.py` rejects the vague values `misc`, `other`,
+  `test` and `general` as errors, in any letter case, instead of only
+  advising against them; a new test pins the mixed-case rejection.
+  ([PR #252])
 
 ### Known gaps
 
@@ -187,3 +192,4 @@ discussion and diff. New entries must include that link; see
 [PR #231]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/231
 [PR #232]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/232
 [PR #236]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/236
+[PR #252]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/252
